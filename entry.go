@@ -1,13 +1,17 @@
 package lfu
 
-import "container/list"
+import (
+	"container/list"
+	"time"
+)
 
 // entry represents a cache item.
 type entry[K comparable, V any] struct {
-	key      K
-	value    V
+	key       K
+	value     V
 	frequency int
-	node     *list.Element
+	node      *list.Element
+	createdAt time.Time
 }
 
 // freqList maintains a list of entries for a particular frequency.

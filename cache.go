@@ -2,6 +2,8 @@ package lfu
 
 import (
 	"errors"
+	"sync"
+	"time"
 )
 
 var ErrNotFound = errors.New("key not found")
@@ -9,39 +11,64 @@ var ErrNotFound = errors.New("key not found")
 type LFUCache[K comparable, V any] struct {
 	capacity int
 	size     int
+	ttl      time.Duration
 
-	keyMap map[K]*entry[K, V]
+	keyMap  map[K]*entry[K, V]
 	freqMap map[int]*freqList[K, V]
 	minFreq int
+
+	mu   sync.RWMutex
+	stop chan struct{}
 }
 
 // Create a new LFU cache with the given capacity.
-func New[K comparable, V any](capacity int) *LFUCache[K, V] {
-	return &LFUCache[K, V]{
+func New[K comparable, V any](capacity int, ttl time.Duration) *LFUCache[K, V] {
+	c := &LFUCache[K, V]{
 		capacity: capacity,
+		ttl:      ttl,
 		keyMap:   make(map[K]*entry[K, V]),
 		freqMap:  make(map[int]*freqList[K, V]),
+		stop:     make(chan struct{}), // to gracefully shutdown cleanup routine
 	}
+	go c.startCleanupLoop()
+	return c
 }
 
 // Retrieve a value and update its frequency.
 func (c *LFUCache[K, V]) Get(key K) (V, bool) {
-	if ent, ok := c.keyMap[key]; ok {
-		c.increment(ent)
-		return ent.value, true
+	c.mu.RLock()
+	ent, ok := c.keyMap[key]
+	c.mu.RUnlock()
+
+	// Remove expired key if spotted to complement the CleanUpLoop
+	if !ok || time.Since(ent.createdAt) > c.ttl {
+		if ok {
+			c.mu.Lock()
+			c.deleteKey(key, ent) // Still O(1), so wouldn't hurt performance much
+			c.mu.Unlock()
+		}
+		var zero V
+		return zero, false
 	}
-	var zero V
-	return zero, false
+
+	c.mu.Lock()
+	c.increment(ent)
+	c.mu.Unlock()
+	return ent.value, true
 }
 
 // Insert or update a key-value pair.
 func (c *LFUCache[K, V]) Set(key K, value V) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.capacity == 0 {
 		return
 	}
 
 	if ent, ok := c.keyMap[key]; ok {
 		ent.value = value
+		ent.createdAt = time.Now()
 		c.increment(ent)
 		return
 	}
@@ -50,13 +77,14 @@ func (c *LFUCache[K, V]) Set(key K, value V) {
 		c.evict()
 	}
 
-	// Insert new entry
 	ent := &entry[K, V]{
-		key:      key,
-		value:    value,
+		key:       key,
+		value:     value,
 		frequency: 1,
+		createdAt: time.Now(),
 	}
 	c.keyMap[key] = ent
+
 	if c.freqMap[1] == nil {
 		c.freqMap[1] = newFreqList[K, V]()
 	}
@@ -101,5 +129,48 @@ func (c *LFUCache[K, V]) evict() {
 }
 
 func (c *LFUCache[K, V]) Len() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.size
+}
+
+func (c *LFUCache[K, V]) deleteKey(key K, ent *entry[K, V]) {
+	c.freqMap[ent.frequency].remove(ent)
+	if c.freqMap[ent.frequency].isEmpty() {
+		delete(c.freqMap, ent.frequency)
+		if c.minFreq == ent.frequency {
+			c.minFreq++
+		}
+	}
+	delete(c.keyMap, key)
+	c.size--
+}
+
+func (c *LFUCache[K, V]) startCleanupLoop() {
+	ticker := time.NewTicker(time.Minute)
+	for {
+		select {
+		case <-ticker.C:
+			c.cleanupExpired()
+		case <-c.stop:
+			ticker.Stop()
+			return
+		}
+	}
+}
+
+func (c *LFUCache[K, V]) cleanupExpired() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	for k, ent := range c.keyMap {
+		if now.Sub(ent.createdAt) > c.ttl {
+			c.deleteKey(k, ent)
+		}
+	}
+}
+
+// Stop terminates the cleanup loop goroutine.
+func (c *LFUCache[K, V]) Stop() {
+	close(c.stop)
 }
