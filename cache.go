@@ -8,27 +8,38 @@ import (
 
 var ErrNotFound = errors.New("key not found")
 
+type EvictionCallback[K comparable, V any] func(key K, value V)
+
 type LFUCache[K comparable, V any] struct {
-	capacity int
-	size     int
-	ttl      time.Duration
+	capacity        int
+	size            int
+	ttl             time.Duration
+	cleanupInterval time.Duration
 
 	keyMap  map[K]*entry[K, V]
 	freqMap map[int]*freqList[K, V]
 	minFreq int
 
-	mu   sync.RWMutex
-	stop chan struct{}
+	mu      sync.RWMutex
+	stop    chan struct{}
+	onEvict EvictionCallback[K, V]
 }
 
 // Create a new LFU cache with the given capacity.
-func New[K comparable, V any](capacity int, ttl time.Duration) *LFUCache[K, V] {
+func New[K comparable, V any](
+	capacity int,
+	ttl time.Duration,
+	cleanupInterval time.Duration,
+	onEvict EvictionCallback[K, V],
+) *LFUCache[K, V] {
 	c := &LFUCache[K, V]{
 		capacity: capacity,
 		ttl:      ttl,
+		cleanupInterval: cleanupInterval,
 		keyMap:   make(map[K]*entry[K, V]),
 		freqMap:  make(map[int]*freqList[K, V]),
 		stop:     make(chan struct{}), // to gracefully shutdown cleanup routine
+		onEvict: onEvict,
 	}
 	go c.startCleanupLoop()
 	return c
@@ -125,6 +136,9 @@ func (c *LFUCache[K, V]) evict() {
 		if list.isEmpty() {
 			delete(c.freqMap, c.minFreq)
 		}
+		if c.onEvict != nil {
+			c.onEvict(evicted.key, evicted.value)
+		}
 	}
 }
 
@@ -144,10 +158,13 @@ func (c *LFUCache[K, V]) deleteKey(key K, ent *entry[K, V]) {
 	}
 	delete(c.keyMap, key)
 	c.size--
+	if c.onEvict != nil {
+		c.onEvict(ent.key, ent.value)
+	}
 }
 
 func (c *LFUCache[K, V]) startCleanupLoop() {
-	ticker := time.NewTicker(time.Minute)
+	ticker := time.NewTicker(c.cleanupInterval)
 	for {
 		select {
 		case <-ticker.C:
