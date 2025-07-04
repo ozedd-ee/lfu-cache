@@ -1,7 +1,6 @@
-package lfu_test
+package lfu
 
 import (
-	"lfu"
 	"sync"
 	"testing"
 	"time"
@@ -11,9 +10,9 @@ import (
 func newTestCache[K comparable, V any](
 	cap int,
 	ttl time.Duration,
-	evictCb lfu.EvictionCallback[K, V],
-) *lfu.LFUCache[K, V] {
-	return lfu.New(cap, ttl, 50*time.Millisecond, evictCb)
+	evictCb EvictionCallback[K, V],
+) *LFUCache[K, V] {
+	return New(cap, ttl, 50*time.Millisecond, evictCb)
 }
 
 // Test basic Set and Get
@@ -118,5 +117,31 @@ func TestEvictionCallback(t *testing.T) {
 
 	if !called {
 		t.Errorf("Expected eviction callback to be called")
+	}
+}
+
+func TestCacheStats(t *testing.T) {
+	cache := newTestCache[string, int](2, time.Minute, nil)
+
+	cache.Set("a", 1)
+	cache.Set("b", 2)
+
+	_, _ = cache.Get("a")
+	_, _ = cache.Get("b")
+
+	_, _ = cache.Get("c")
+
+	cache.Set("c", 3)
+
+	stats := cache.Stats()
+
+	if stats.Hits != 2 {
+		t.Errorf("Expected 2 hits, got %d", stats.Hits)
+	}
+	if stats.Misses != 1 {
+		t.Errorf("Expected 1 miss, got %d", stats.Misses)
+	}
+	if stats.Evictions != 1 {
+		t.Errorf("Expected 1 eviction, got %d", stats.Evictions)
 	}
 }
