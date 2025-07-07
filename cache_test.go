@@ -1,6 +1,7 @@
 package lfu
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ func TestSetAndGet(t *testing.T) {
 
 	cache.Set("a", 1)
 	cache.Set("b", 2)
- 
+
 	if v, ok := cache.Get("a"); !ok || v != 1 {
 		t.Errorf("Expected a=1, got %v", v)
 	}
@@ -35,7 +36,7 @@ func TestEviction(t *testing.T) {
 	var evicted []string
 	var mu sync.Mutex
 
-	cache := newTestCache( 2, time.Minute, func(k string, v int) {
+	cache := newTestCache(2, time.Minute, func(k string, v int) {
 		mu.Lock()
 		evicted = append(evicted, k)
 		mu.Unlock()
@@ -143,5 +144,37 @@ func TestCacheStats(t *testing.T) {
 	}
 	if stats.Evictions != 1 {
 		t.Errorf("Expected 1 eviction, got %d", stats.Evictions)
+	}
+}
+
+func BenchmarkLFU_Set(b *testing.B) {
+	cache := newTestCache[string, int](10000, time.Hour, nil)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cache.Set(fmt.Sprintf("key-%d", i), i)
+	}
+}
+
+func BenchmarkLFU_Get(b *testing.B) {
+	cache := newTestCache[string, int](10000, time.Hour, nil)
+	for i := 0; i < 10000; i++ {
+		cache.Set(fmt.Sprintf("key-%d", i), i)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		key := fmt.Sprintf("key-%d", i%10000)
+		cache.Get(key)
+	}
+}
+
+func BenchmarkLFU_Mixed(b *testing.B) {
+	cache := newTestCache[string, int](10000, time.Hour, nil)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if i&1 == 0 {
+			cache.Set(fmt.Sprintf("key-%d", i%20000), i)
+		} else {
+			cache.Get(fmt.Sprintf("key-%d", i%20000))
+		}
 	}
 }
