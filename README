@@ -59,8 +59,10 @@ func main() {
 ```bash
 go test -v 
 ```
-
-
+## Run benchmarks
+```bash
+go test -bench=. -benchmem
+```
 
 ##  API
 
