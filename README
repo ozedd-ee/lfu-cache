@@ -19,7 +19,7 @@ Supports **O(1)** time `Get` and `Set` operations, TTL-based expiration, automat
 
 ```bash
 go get github.com/ozedd-ee/lfu
-````
+```
 
 
 ##  Usage:
